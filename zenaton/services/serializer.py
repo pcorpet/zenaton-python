@@ -2,6 +2,7 @@ import copy
 import json
 import inspect
 import importlib.util
+import sys
 
 from zenaton.services.properties import Properties
 from zenaton.exceptions import InvalidArgumentError
@@ -103,8 +104,9 @@ class Serializer:
         return self.__encode_object(object_)
 
     def __encode_object(self, object_):
+        object_type = type(object_)
         return {
-            self.KEY_OBJECT_NAME: type(object_).__name__,
+            self.KEY_OBJECT_NAME: object_type.__module__ + '.' + object_type.__name__,
             self.KEY_OBJECT_PROPERTIES: self.__encode_legacy_dict(self.properties.from_(object_))
         }
 
@@ -207,10 +209,29 @@ class Serializer:
                 isinstance(data, float) or
                 isinstance(data, bool) or data is None)
 
-    def import_class(self, workflow_name, class_name):
+    def _load_boot_module(self):
         spec = importlib.util.spec_from_file_location('boot', self.boot)
         boot = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(boot)
+        return boot
+
+    def import_class(self, workflow_name, class_name):
+        # Handle fully qualified name first.
+        if '.' in class_name:
+            module_name, class_name = class_name.rsplit('.')
+            if module_name not in sys.modules:
+                self._load_boot_module()
+            try:
+                module = sys.modules[module_name]
+            except KeyError:
+                raise ValueError('Cannot find module "{}" when loading boot'.format(module_name))
+            try:
+                return getattr(module, class_name)
+            except AttributeError:
+                raise ValueError(
+                    'Cannot find cass "{}" in module {}'.format(class_name, module_name))
+
+        boot = self._load_boot_module()
         workflow_class = getattr(boot, workflow_name)
         workflow_module = inspect.getmodule(workflow_class)
         return getattr(workflow_module, class_name)
